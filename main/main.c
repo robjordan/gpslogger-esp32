@@ -1,4 +1,4 @@
-/* SPIFFS filesystem example.
+/* gpslogger-esp32
    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
    Unless required by applicable law or agreed to in writing, this
@@ -18,7 +18,7 @@ static const char *TAG = "example";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Initializing SPIFFS");
+    ESP_LOGI(TAG, "Initializing SPIFFS for gpslogger");
     
     esp_vfs_spiffs_conf_t conf = {
       .base_path = "/spiffs",

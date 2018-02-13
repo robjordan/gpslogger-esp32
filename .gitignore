@@ -1,3 +1,7 @@
 # emacs backups
 *~
-# 
+# generated files
+*.o
+sdkconfig.old
+build/*
+
