@@ -3,7 +3,7 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := spiffs
+PROJECT_NAME := gpslogger-esp32
 
 include $(IDF_PATH)/make/project.mk
 
