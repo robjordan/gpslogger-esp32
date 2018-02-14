@@ -1,5 +1,9 @@
-# emacs backups
+# emacs backups and work-in-progress files
 *~
+\#*\#
+.\#*
+
+
 # generated files
 *.o
 sdkconfig.old
