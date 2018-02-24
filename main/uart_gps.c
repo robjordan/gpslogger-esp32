@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -10,6 +12,8 @@
 #define BUF_SIZE (1024)
 #define RD_BUF_SIZE (BUF_SIZE)
 #define NAV_PVT_ID (0x01+(0x07<<8))
+#define NAV_PVT_VALID_DATE 0b001
+#define NAV_PVT_VALID_TIME 0b010
 
 static QueueHandle_t uart0_queue;
 extern const char *TAG;
@@ -69,30 +73,60 @@ uint16_t uart_msg_checksum(uint8_t *content, uint32_t len) {
   return (checksum);
 }
 
+static FILE *uart_create_gps_file(gps_message *msg) {
+    FILE *fp;
+    char datestamp[] = "/spiffs/YYYYMMDD-HHMMSS.gps";
+    struct tm now;		/* to be filled with GPS time */
+    time_t t;			/* seconds since epoch */
+    struct timeval tv;		/* required as parameter to settimeofday() */
+    
+    /* most likely the RTC will not have been set, so we'll end up with a wrong timestamp on the file in the directory. */
+    /* so, let's set the RTC using the GPS data. */
+    now.tm_sec = msg->payload.navPVT.sec; /* seconds */
+    now.tm_min = msg->payload.navPVT.min; /* minutes */
+    now.tm_hour = msg->payload.navPVT.hour;	/* hours */
+    now.tm_mday = msg->payload.navPVT.day;	/* day of month */
+    now.tm_mon = msg->payload.navPVT.month - 1;	/* month */
+    now.tm_year = msg->payload.navPVT.year - 1900;	/* year */
+    now.tm_isdst = 0;					/* no daylight savings in effect (because it's CUT) */
+    t = mktime(&now);
+    ESP_LOGI(TAG, "mktime() returned %d.", (unsigned int)t);
+    tv.tv_sec = t;
+    tv.tv_usec = 0;
+    if (settimeofday(&tv, NULL) < 0) {
+	ESP_LOGE(TAG, "Failed to settimeofday().");
+    }
+    
+    /* now construct a filename that will indicate the time/date of the first GPS track point */
+    sprintf(datestamp,
+	    "/spiffs/%04d%02d%0d-%02d%02d%02d.gps",
+	    msg->payload.navPVT.year,
+	    msg->payload.navPVT.month,
+	    msg->payload.navPVT.day,
+	    msg->payload.navPVT.hour,
+	    msg->payload.navPVT.min,
+	    msg->payload.navPVT.sec);
+    fp = fopen(datestamp, "w");
+    if (fp == NULL) {
+	ESP_LOGE(TAG, "Failed to open file for writing, %s", datestamp);
+	return NULL;
+    }
+    return (fp);
+}
+
 static void uart_write_gps_msg_to_file(gps_message *msg) {
     static FILE *fp = NULL;
-    char datestamp[] = "/spiffs/YYYYMMDD-HHMMSS.gps";
     size_t nwritten = 0;
     
     if (fp == NULL) {
-	sprintf(datestamp,
-		"/spiffs/%04d%02d%0d-%02d%02d%02d.gps",
-		msg->payload.navPVT.year,
-		msg->payload.navPVT.month,
-		msg->payload.navPVT.day,
-		msg->payload.navPVT.hour,
-		msg->payload.navPVT.min,
-		msg->payload.navPVT.sec);
-	fp = fopen(datestamp, "w");
-	if (fp == NULL) {
-	    ESP_LOGE(TAG, "Failed to open file for writing: %s", datestamp);
-	    return;
-	}
+	fp = uart_create_gps_file(msg);
     }
-    /* write, in binary format, everything in the message from "year" up to, but not including, "hMSL" */
-    nwritten = fwrite(&msg->payload.navPVT.year, 1, (void *)&msg->payload.navPVT.hMSL - (void *)&msg->payload.navPVT.year, fp);
-    ESP_LOGI(TAG,"Wrote %d bytes to file", nwritten); 
-    fflush(fp);
+    if (fp != NULL) {
+	/* write, in binary format, everything in the message from "year" up to, but not including, "hMSL" */
+	nwritten = fwrite(&msg->payload.navPVT.year, 1, (void *)&msg->payload.navPVT.hMSL - (void *)&msg->payload.navPVT.year, fp);
+	ESP_LOGI(TAG,"Wrote %d bytes to file", nwritten); 
+	fflush(fp);
+    }
     return;
     
 }
@@ -143,7 +177,14 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 			     (msg->payload.navPVT.lat) / 10000000, abs((msg->payload.navPVT.lat) % 10000000),
 			     (msg->payload.navPVT.lon) / 10000000, abs((msg->payload.navPVT.lon) % 10000000),
 			     msg->checksum);
-		    uart_write_gps_msg_to_file(msg);
+		    /* check that BOTH the validDate and validTime flags are turned on */
+		    if ((msg->payload.navPVT.valid & NAV_PVT_VALID_DATE) && (msg->payload.navPVT.valid & NAV_PVT_VALID_TIME)) {
+			/* the first few messages sometimes have spurious data including date/time */
+			uart_write_gps_msg_to_file(msg);
+		    } else {
+			ESP_LOGW(TAG, "Invalid date or time flag set: 0x%02x.\n",
+				 msg->payload.navPVT.valid);
+		    }
 		}
 
 		/* skip to next message in buffer (if there is one) */
@@ -251,9 +292,12 @@ void uart_gps_init() {
 	// 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39, //(1Hz)
 	0xB5,0x62,0x06,0x08,0x06,0x00,0x88,0x13,0x01,0x00,0x01,0x00,0xB1,0x49, //(0.2hz)
 
-	// GNSS type configuration: GPS only (power-saving)
+	// GNSS type configuration
 	0xB5,0x62,0x06,0x3E,0x24,0x00,0x00,0x00,0x16,0x04,0x00,0x04,0xFF,0x00,0x01,0x00,0x00,0x01,0x01,0x01,0x03,0x00,0x01,
-	0x00,0x00,0x01,0x05,0x00,0x03,0x00,0x00,0x00,0x00,0x01,0x06,0x08,0xFF,0x00,0x00,0x00,0x00,0x01,0xA5,0x39
+	0x00,0x00,0x01,0x05,0x00,0x03,0x00,0x00,0x00,0x00,0x01,0x06,0x08,0xFF,0x00,0x00,0x00,0x00,0x01,0xA5,0x39,
+
+	// Power Save mode
+	0xB5,0x62,0x06,0x11,0x02,0x00,0x08,0x01,0x22,0x92
     };
 
     // uart_write_bytes(UART_NUM, UBLOX_BAUD_RATE, sizeof UBLOX_BAUD_RATE);
