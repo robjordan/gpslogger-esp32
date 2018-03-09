@@ -19,7 +19,7 @@ extern void uart_main();
 extern void spiffs_main();
 
 void app_main() {
-    // spiffs_main();		/* mount the SPIFFS partition as a file system */
-    tp_main();
+    spiffs_main();		/* mount the SPIFFS partition as a file system */
+    // tp_main();
     uart_main();
 }

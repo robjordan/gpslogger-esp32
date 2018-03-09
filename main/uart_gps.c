@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 
 #define UART_NUM UART_NUM_1
@@ -14,6 +15,7 @@
 #define NAV_PVT_ID (0x01+(0x07<<8))
 #define NAV_PVT_VALID_DATE 0b001
 #define NAV_PVT_VALID_TIME 0b010
+#define GPS_BLINK_LED GPIO_NUM_27
 
 static QueueHandle_t uart0_queue;
 extern const char *TAG;
@@ -59,6 +61,17 @@ typedef struct {
   } payload;
   uint16_t checksum;
 } gps_message;
+
+
+void uart_blink(unsigned ontime, unsigned offtime, unsigned repeats) {
+    while (repeats > 0) {
+	gpio_set_level(GPS_BLINK_LED, 1);
+	vTaskDelay(ontime / portTICK_PERIOD_MS);
+	gpio_set_level(GPS_BLINK_LED, 0);
+	vTaskDelay(offtime / portTICK_PERIOD_MS);
+	repeats--;
+    }
+}
 
 uint16_t uart_msg_checksum(uint8_t *content, uint32_t len) {
   uint8_t ckA = 0, ckB = 0;
@@ -137,7 +150,8 @@ static void uart_write_gps_msg_to_file(gps_message *msg) {
 static void uart_handle_gps_message(uint8_t *buf, size_t len) {
     /* let's make the simplifying assumption that UBX messages won't span multiple UART events. */
     /* it may not always be true, but empirically it seems to be the case. */
-
+    static bool fix = false;
+    
     /* search for 0xb5 0x62 as the signature for the start of a UBX message */
     uint8_t *p = buf;
     while ((p != NULL) && (p < (buf + len))) {
@@ -164,7 +178,7 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 		    ESP_LOG_BUFFER_HEXDUMP(TAG, p, 2+2+2+msg->length+2, ESP_LOG_INFO);
 		    
 		} else {
-		    /* we have a NAV-PVT, the only message we need, and it's valid */
+		    /* we have a NAV-PVT, the only message we need, and it's format is valid (saying nothing about the GPS data validity) */
 		    ESP_LOGI(TAG,
 			     "NAV-PVT: %02d/%02d/%02d %02d:%02d:%02d, fix: %d, fixType: %d, numSV: %d, lat, lon: %d.%07d,%d.%07d checksum: 0x%04x", 
 			     msg->payload.navPVT.year, 
@@ -183,12 +197,22 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 		    if ((msg->payload.navPVT.valid & NAV_PVT_VALID_DATE) && (msg->payload.navPVT.valid & NAV_PVT_VALID_TIME)) {
 			/* the first few messages sometimes have spurious data including date/time */
 			uart_write_gps_msg_to_file(msg);
+			fix = (msg->payload.navPVT.flags & 0x01);
+			   
 		    } else {
 			ESP_LOGW(TAG, "Invalid date or time flag set: 0x%02x.\n",
 				 msg->payload.navPVT.valid);
 		    }
 		}
-
+		
+		/* blink slow if no fix, fast if fix */
+		if (fix) {
+		    uart_blink(10, 10, 1);
+		    fix = false; /* reset in case the next message is invalid */
+		} else {
+		    uart_blink(500, 500, 1);
+		}
+		
 		/* skip to next message in buffer (if there is one) */
 		p += 2 + 2 + 2 + msg->length + 2; /* signature + id + length + payload-length + checksum  */
 		
@@ -328,13 +352,17 @@ void uart_main()
     };
     uart_param_config(UART_NUM, &uart_config);
 
-    //Set UART log level
+    // Set UART log level
     esp_log_level_set(TAG, ESP_LOG_INFO);
-    //Set UART pins 
+    // Set UART pins 
     uart_set_pin(UART_NUM, 26, 25, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    //Install UART driver, and get the queue.
+    // Install UART driver, and get the queue.
     uart_driver_install(UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 20, &uart0_queue, 0);
     uart_gps_init();		/* specify what messages we want / don't want */
+
+    // Setup a GPIO to blink LED when a valid GPS reading is received
+    gpio_pad_select_gpio(GPS_BLINK_LED);
+    ESP_ERROR_CHECK(gpio_set_direction(GPS_BLINK_LED, GPIO_MODE_OUTPUT));
 
     //Create a task to handler UART event from ISR
     xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
