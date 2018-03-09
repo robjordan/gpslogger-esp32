@@ -15,11 +15,11 @@
 const char *TAG = "gpslogger";
 
 extern void tp_main();
-extern void uart_main();
+extern void gps_main();
 extern void spiffs_main();
 
 void app_main() {
     spiffs_main();		/* mount the SPIFFS partition as a file system */
     // tp_main();
-    uart_main();
+    gps_main();
 }

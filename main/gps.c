@@ -63,7 +63,7 @@ typedef struct {
 } gps_message;
 
 
-void uart_blink(unsigned ontime, unsigned offtime, unsigned repeats) {
+void gps_blink(unsigned ontime, unsigned offtime, unsigned repeats) {
     while (repeats > 0) {
 	gpio_set_level(GPS_BLINK_LED, 1);
 	vTaskDelay(ontime / portTICK_PERIOD_MS);
@@ -73,7 +73,7 @@ void uart_blink(unsigned ontime, unsigned offtime, unsigned repeats) {
     }
 }
 
-uint16_t uart_msg_checksum(uint8_t *content, uint32_t len) {
+uint16_t gps_msg_checksum(uint8_t *content, uint32_t len) {
   uint8_t ckA = 0, ckB = 0;
   uint16_t checksum = 0;
 
@@ -88,7 +88,7 @@ uint16_t uart_msg_checksum(uint8_t *content, uint32_t len) {
   return (checksum);
 }
 
-static FILE *uart_create_gps_file(gps_message *msg) {
+static FILE *gps_create_gps_file(gps_message *msg) {
     FILE *fp;
     char datestamp[] = "/spiffs/YYYYMMDD-HHMMSS.gps";
     struct tm now;		/* to be filled with GPS time */
@@ -129,12 +129,12 @@ static FILE *uart_create_gps_file(gps_message *msg) {
     return (fp);
 }
 
-static void uart_write_gps_msg_to_file(gps_message *msg) {
+static void gps_write_gps_msg_to_file(gps_message *msg) {
     static FILE *fp = NULL;
     size_t nwritten = 0;
     
     if (fp == NULL) {
-	fp = uart_create_gps_file(msg);
+	fp = gps_create_gps_file(msg);
     }
     if (fp != NULL) {
 	/* write, in binary format, everything in the message from "year" up to, but not including, "hMSL" */
@@ -147,7 +147,7 @@ static void uart_write_gps_msg_to_file(gps_message *msg) {
 }
 
 
-static void uart_handle_gps_message(uint8_t *buf, size_t len) {
+static void gps_handle_message(uint8_t *buf, size_t len) {
     /* let's make the simplifying assumption that UBX messages won't span multiple UART events. */
     /* it may not always be true, but empirically it seems to be the case. */
     static bool fix = false;
@@ -171,10 +171,10 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 		    /* it's long enough for a payload length, but the message is incomplete  */
 		    ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x incomplete.\n", msg->id>>8, msg->id&0xFF);
 		    
-		} else if (msg->checksum != uart_msg_checksum(p+2, 2+2+msg->length)) {
+		} else if (msg->checksum != gps_msg_checksum(p+2, 2+2+msg->length)) {
 		    /* it looks like a NAV-PVT but there's a checksum error */
 		    ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x checksum error: msg=0x%04x calc=0x%04x.\n",
-			     msg->id>>8, msg->id&0xFF, msg->checksum, uart_msg_checksum(p+2, 2+2+msg->length));
+			     msg->id>>8, msg->id&0xFF, msg->checksum, gps_msg_checksum(p+2, 2+2+msg->length));
 		    ESP_LOG_BUFFER_HEXDUMP(TAG, p, 2+2+2+msg->length+2, ESP_LOG_INFO);
 		    
 		} else {
@@ -196,7 +196,7 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 		    /* check that BOTH the validDate and validTime flags are turned on */
 		    if ((msg->payload.navPVT.valid & NAV_PVT_VALID_DATE) && (msg->payload.navPVT.valid & NAV_PVT_VALID_TIME)) {
 			/* the first few messages sometimes have spurious data including date/time */
-			uart_write_gps_msg_to_file(msg);
+			gps_write_gps_msg_to_file(msg);
 			fix = (msg->payload.navPVT.flags & 0x01);
 			   
 		    } else {
@@ -207,10 +207,10 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
 		
 		/* blink slow if no fix, fast if fix */
 		if (fix) {
-		    uart_blink(10, 10, 1);
+		    gps_blink(10, 10, 1);
 		    fix = false; /* reset in case the next message is invalid */
 		} else {
-		    uart_blink(500, 500, 1);
+		    gps_blink(500, 500, 1);
 		}
 		
 		/* skip to next message in buffer (if there is one) */
@@ -225,7 +225,7 @@ static void uart_handle_gps_message(uint8_t *buf, size_t len) {
     
 }
 
-static void uart_event_task(void *pvParameters)
+static void gps_event_task(void *pvParameters)
 {
     uart_event_t event;
     uint8_t* dtmp = (uint8_t*) malloc(RD_BUF_SIZE);
@@ -243,7 +243,7 @@ static void uart_event_task(void *pvParameters)
                     ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
                     uart_read_bytes(UART_NUM, dtmp, event.size, portMAX_DELAY);
 		    ESP_LOG_BUFFER_HEXDUMP(TAG, dtmp, event.size, ESP_LOG_INFO);
-		    uart_handle_gps_message(dtmp, event.size);
+		    gps_handle_message(dtmp, event.size);
                     ESP_LOGI(TAG, "[DATA EVT]:");
                      break;
                 //Event of HW FIFO overflow detected
@@ -287,7 +287,7 @@ static void uart_event_task(void *pvParameters)
     vTaskDelete(NULL);
 }
 
-void uart_gps_init() {
+void gps_init() {
     // const char UBLOX_BAUD_RATE[] = {
     // 0xB5,0x62,0x06,0x00,0x14,0x00,0x01,0x00,0x00,0x00,0x10,0x00,0x00,0x00,0x00,0xC2,0x01,0x00,0x01,0x00,0x01,0x00,0x00,
     // 0x00,0x00,0x00,0xF0,0xCA // 115200 baud
@@ -337,7 +337,7 @@ void uart_gps_init() {
     return;
 }
 
-void uart_main()
+void gps_main()
 {
     esp_log_level_set(TAG, ESP_LOG_VERBOSE);
 
@@ -358,12 +358,12 @@ void uart_main()
     uart_set_pin(UART_NUM, 26, 25, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
     // Install UART driver, and get the queue.
     uart_driver_install(UART_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 20, &uart0_queue, 0);
-    uart_gps_init();		/* specify what messages we want / don't want */
+    gps_init();		/* specify what messages we want / don't want */
 
     // Setup a GPIO to blink LED when a valid GPS reading is received
     gpio_pad_select_gpio(GPS_BLINK_LED);
     ESP_ERROR_CHECK(gpio_set_direction(GPS_BLINK_LED, GPIO_MODE_OUTPUT));
 
     //Create a task to handler UART event from ISR
-    xTaskCreate(uart_event_task, "uart_event_task", 2048, NULL, 12, NULL);
+    xTaskCreate(gps_event_task, "gps_event_task", 2048, NULL, 12, NULL);
 }
