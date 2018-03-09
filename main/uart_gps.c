@@ -35,7 +35,7 @@ typedef struct {
       int32_t nano;
       uint8_t fixType;
       uint8_t flags;
-      uint8_t reserved1;
+      uint8_t flags2;
       uint8_t numSV;
       int32_t lon;
       int32_t lat;
@@ -47,12 +47,14 @@ typedef struct {
       int32_t velE;
       int32_t velD;
       int32_t gSpeed;
-      int32_t heading;
+      int32_t headMot;
       uint32_t sAcc;
-      uint32_t headingAcc;
+      uint32_t headAcc;
       uint16_t pDOP;
-      uint16_t reserved2;
-      uint32_t reserved3;
+      uint8_t reserved1[6];
+      int32_t headVeh;
+      int16_t magDec;
+      int16_t magAcc;
     } navPVT; 
   } payload;
   uint16_t checksum;
@@ -99,7 +101,7 @@ static FILE *uart_create_gps_file(gps_message *msg) {
     
     /* now construct a filename that will indicate the time/date of the first GPS track point */
     sprintf(datestamp,
-	    "/spiffs/%04d%02d%0d-%02d%02d%02d.gps",
+	    "/spiffs/%04d%02d%02d-%02d%02d%02d.gps",
 	    msg->payload.navPVT.year,
 	    msg->payload.navPVT.month,
 	    msg->payload.navPVT.day,

@@ -55,7 +55,7 @@ static void list(char *path, char *match) {
 
 	    if (statok == 0) {
 		tm_info = localtime(&sb.st_mtime);
-		strftime(tbuffer, 80, "%d/%m/%Y %R", tm_info);
+		strftime(tbuffer, 80, "%02d/%02m/%04Y %R", tm_info);
 	    }
 	    else sprintf(tbuffer, "                ");
 
