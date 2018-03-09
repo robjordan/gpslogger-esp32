@@ -183,7 +183,7 @@ void gps_init() {
 	0x00,0x00,0x01,0x05,0x00,0x03,0x00,0x00,0x00,0x00,0x01,0x06,0x08,0xFF,0x00,0x00,0x00,0x00,0x01,0xA5,0x39,
 
 	// Power Save mode
-	0xB5,0x62,0x06,0x11,0x02,0x00,0x08,0x01,0x22,0x92
+	// 0xB5,0x62,0x06,0x11,0x02,0x00,0x08,0x01,0x22,0x92
     };
 
     // uart_write_bytes(UART_NUM, UBLOX_BAUD_RATE, sizeof UBLOX_BAUD_RATE);
@@ -274,9 +274,6 @@ static void gps_handle_nmea_message(uint8_t *buf, size_t len) {
 }
 
 static void gps_handle_message(uint8_t *buf, size_t len) {
-    /* let's make the simplifying assumption that messages won't span multiple UART events. */
-    /* it may not always be true, but empirically it seems to be the case. */
-
     
     uint8_t *p = buf;
     size_t msglen;
@@ -287,7 +284,7 @@ static void gps_handle_message(uint8_t *buf, size_t len) {
 	/* search for 0xb5 0x62 as the signature for the start of a UBX message */
 	if ((*p == 0xb5) && (*(p+1) == 0x62)) {
 	    /* skip two bytes containing class and id, then read the two-byte length */
-	    msglen = 2 + 2 + *(uint16_t *)(p+4) + 2;  /* signature + id + length + payload-length + checksum  */
+	    msglen = 2 + 2 + 2 + *(uint16_t *)(p+4) + 2;  /* signature + id + length + payloadLength + checksum  */
 	    gps_handle_ubx_message(p, msglen);
 	    
 	    /* skip to next message in buffer (if there is one) */
@@ -313,11 +310,15 @@ static void gps_handle_message(uint8_t *buf, size_t len) {
 	    p++;		/* skip a character and start again */
 	}
     }
+
+    /* perhaps there is a partial message left unprocessed in the buffer */
 }
 
 static void gps_event_task(void *pvParameters)
 {
     uart_event_t event;
+    size_t nread=0;
+    
     uint8_t* dtmp = (uint8_t*) malloc(RD_BUF_SIZE);
     for(;;) {
         //Waiting for UART event.
@@ -331,11 +332,11 @@ static void gps_event_task(void *pvParameters)
                 be full.*/
                 case UART_DATA:
                     ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
-                    uart_read_bytes(UART_NUM, dtmp, event.size, portMAX_DELAY);
-		    ESP_LOG_BUFFER_HEXDUMP(TAG, dtmp, event.size, ESP_LOG_INFO);
-		    gps_handle_message(dtmp, event.size);
+		    nread = uart_read_bytes(UART_NUM, dtmp, RD_BUF_SIZE, 50);
+		    ESP_LOG_BUFFER_HEXDUMP(TAG, dtmp, nread, ESP_LOG_INFO);
+		    gps_handle_message(dtmp, nread);
                     ESP_LOGI(TAG, "[DATA EVT]:");
-                     break;
+		    break;
                 //Event of HW FIFO overflow detected
                 case UART_FIFO_OVF:
                     ESP_LOGI(TAG, "hw fifo overflow");
