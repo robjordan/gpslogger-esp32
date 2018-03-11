@@ -17,9 +17,11 @@ const char *TAG = "gpslogger";
 extern void tp_main();
 extern void gps_main();
 extern void spiffs_main();
+extern void http_get_main();
 
 void app_main() {
     spiffs_main();		/* mount the SPIFFS partition as a file system */
+    http_get_main();		/* start wifi and download GPS almanac etc */
     // tp_main();
     gps_main();
 }

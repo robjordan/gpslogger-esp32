@@ -12,6 +12,7 @@
 #define UART_NUM UART_NUM_1
 #define BUF_SIZE (1024)
 #define RD_BUF_SIZE (BUF_SIZE)
+#define MGA_ANO_ID (0x13+(0x20<<8))
 #define NAV_PVT_ID (0x01+(0x07<<8))
 #define NAV_PVT_VALID_DATE 0b001
 #define NAV_PVT_VALID_TIME 0b010
@@ -22,45 +23,57 @@ static QueueHandle_t uart0_queue;
 extern const char *TAG;
 
 typedef struct {
-  uint16_t id;
-  uint16_t length;
-  union {
-    struct {
-      uint32_t iTOW;
-      uint16_t year;
-      uint8_t month;
-      uint8_t day;
-      uint8_t hour;
-      uint8_t min;
-      uint8_t sec;
-      uint8_t valid;
-      uint32_t tAcc;
-      int32_t nano;
-      uint8_t fixType;
-      uint8_t flags;
-      uint8_t flags2;
-      uint8_t numSV;
-      int32_t lon;
-      int32_t lat;
-      int32_t height;
-      int32_t hMSL;
-      uint32_t hAcc;
-      uint32_t vAcc;
-      int32_t velN;
-      int32_t velE;
-      int32_t velD;
-      int32_t gSpeed;
-      int32_t headMot;
-      uint32_t sAcc;
-      uint32_t headAcc;
-      uint16_t pDOP;
-      uint8_t reserved1[6];
-      int32_t headVeh;
-      int16_t magDec;
-      int16_t magAcc;
-    } navPVT; 
-  } payload;
-  uint16_t checksum;
+    uint16_t id;
+    uint16_t length;
+    union {
+	struct {
+	    uint32_t iTOW;
+	    uint16_t year;
+	    uint8_t month;
+	    uint8_t day;
+	    uint8_t hour;
+	    uint8_t min;
+	    uint8_t sec;
+	    uint8_t valid;
+	    uint32_t tAcc;
+	    int32_t nano;
+	    uint8_t fixType;
+	    uint8_t flags;
+	    uint8_t flags2;
+	    uint8_t numSV;
+	    int32_t lon;
+	    int32_t lat;
+	    int32_t height;
+	    int32_t hMSL;
+	    uint32_t hAcc;
+	    uint32_t vAcc;
+	    int32_t velN;
+	    int32_t velE;
+	    int32_t velD;
+	    int32_t gSpeed;
+	    int32_t headMot;
+	    uint32_t sAcc;
+	    uint32_t headAcc;
+	    uint16_t pDOP;
+	    uint8_t reserved1[6];
+	    int32_t headVeh;
+	    int16_t magDec;
+	    int16_t magAcc;
+	} navPVT;
+	struct {
+	    uint8_t type;
+	    uint8_t version;
+	    uint8_t svId;
+	    uint8_t gnssId;
+	    uint8_t year;
+	    uint8_t month;
+	    uint8_t day;
+	    uint8_t reserved1;
+	    uint8_t data[64];
+	    uint8_t reserved2[4];
+	} mgaANO;
+    } payload;
+    uint16_t checksum;
 } gps_message;
 
 
@@ -130,7 +143,7 @@ static FILE *gps_create_gps_file(gps_message *msg) {
     return (fp);
 }
 
-static void gps_write_gps_msg_to_file(gps_message *msg) {
+static void gps_write_trackpoint_to_file(gps_message *msg) {
     static FILE *fp = NULL;
     size_t nwritten = 0;
     
@@ -140,7 +153,7 @@ static void gps_write_gps_msg_to_file(gps_message *msg) {
     if (fp != NULL) {
 	/* write, in binary format, everything in the message from "year" up to, but not including, "hMSL" */
 	nwritten = fwrite(&msg->payload.navPVT.year, 1, (void *)&msg->payload.navPVT.hMSL - (void *)&msg->payload.navPVT.year, fp);
-	ESP_LOGI(TAG,"Wrote %d bytes to file", nwritten); 
+	ESP_LOGI(TAG,"Wrote %d bytes to GPS file", nwritten); 
 	fflush(fp);
     }
     return;
@@ -197,21 +210,16 @@ void gps_init() {
     return;
 }
 
-static void gps_handle_ubx_message(uint8_t *buf, size_t len) {
+void gps_handle_ubx_message(uint8_t *buf, size_t len) {
     static bool fix = false;
     uint8_t *p = buf;
-
     ESP_LOGI(TAG, "gps_handle_ubx_message: %d", len);
-    ESP_LOG_BUFFER_HEXDUMP(TAG, buf, len, ESP_LOG_INFO);
-
+    // ESP_LOG_BUFFER_HEXDUMP(TAG, buf, len, ESP_LOG_INFO);
     
     /* we've found the start of a UBX message */
     gps_message *msg = (gps_message *)(p+2);
-    if (msg->id != NAV_PVT_ID) {
-	/* it's not a message we can handle, log, ignore, and skip it */
-	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x not handled.\n", msg->id>>8, msg->id&0xFF);
-		    
-    } else if ((p + 2 + 2 + 2) > (buf + len)) {
+    /* check for correct formatting of the generic parts of a UBX message */
+    if ((p + 2 + 2 + 2) > (buf + len)) {
 	/* it's too short to even contain a payload length. skip it */
 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x too short (no payload length).\n", msg->id>>8, msg->id&0xFF);
 		    
@@ -219,13 +227,13 @@ static void gps_handle_ubx_message(uint8_t *buf, size_t len) {
 	/* it's long enough for a payload length, but the message is incomplete  */
 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x incomplete.\n", msg->id>>8, msg->id&0xFF);
 		    
-    } else if (msg->checksum != gps_msg_checksum(p+2, 2+2+msg->length)) {
-	/* it looks like a NAV-PVT but there's a checksum error */
+    } else if (*(uint16_t *)(p+2+2+2+ msg->length) != gps_msg_checksum(p+2, 2+2+msg->length)) {
+	/* there's a checksum error */
 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x checksum error: msg=0x%04x calc=0x%04x.\n",
-		 msg->id>>8, msg->id&0xFF, msg->checksum, gps_msg_checksum(p+2, 2+2+msg->length));
+		 msg->id>>8, msg->id&0xFF, (*(uint16_t *)(p + 2 + 2 + msg->length)), gps_msg_checksum(p+2, 2+2+msg->length));
 		    
-    } else {
-	/* we have a NAV-PVT, the only message we need, and its format is valid (saying nothing about the GPS data validity) */
+    } else if (msg->id == NAV_PVT_ID) {
+	/* we have a NAV-PVT, and its format is valid (saying nothing about the GPS data validity) */
 	ESP_LOGI(TAG,
 		 "NAV-PVT: %02d/%02d/%02d %02d:%02d:%02d, fix: %d, fixType: %d, numSV: %d, lat, lon: %d.%07d,%d.%07d checksum: 0x%04x", 
 		 msg->payload.navPVT.year, 
@@ -243,23 +251,101 @@ static void gps_handle_ubx_message(uint8_t *buf, size_t len) {
 	/* check that BOTH the validDate and validTime flags are turned on */
 	if ((msg->payload.navPVT.valid & NAV_PVT_VALID_DATE) && (msg->payload.navPVT.valid & NAV_PVT_VALID_TIME)) {
 	    /* the first few messages sometimes have spurious data including date/time */
-	    gps_write_gps_msg_to_file(msg);
+	    gps_write_trackpoint_to_file(msg);
 	    fix = (msg->payload.navPVT.flags & 0x01);
 			   
 	} else {
 	    ESP_LOGW(TAG, "Invalid date or time flag set: 0x%02x.\n",
 		     msg->payload.navPVT.valid);
+	    /* blink red if no fix, green if fix */
+	    if (fix) {
+		gps_blink(GPS_BLINK_GREEN, 10, 10, 1);
+		fix = false; /* reset in case the next message is invalid */
+	    } else {
+		gps_blink(GPS_BLINK_RED, 10, 10, 1);
+	    }
 	}
+    } else if (msg->id == MGA_ANO_ID) {
+	/* write the message to a file named for the date */
+	ESP_LOGI(TAG,
+		 "MGA-ANO: %02d/%02d/%02d: type=%d version=%d svId=%d gnssId=%d",
+		 msg->payload.mgaANO.year,
+		 msg->payload.mgaANO.month,
+		 msg->payload.mgaANO.day,
+		 msg->payload.mgaANO.type,
+		 msg->payload.mgaANO.version,
+		 msg->payload.mgaANO.svId,
+		 msg->payload.mgaANO.gnssId);
     }
-		
-    /* blink red if no fix, green if fix */
-    if (fix) {
-	gps_blink(GPS_BLINK_GREEN, 10, 10, 1);
-	fix = false; /* reset in case the next message is invalid */
-    } else {
-	gps_blink(GPS_BLINK_RED, 10, 10, 1);
+    else {
+	/* it's not a message we can handle, log, ignore, and skip it */
+	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x not handled.\n", msg->id>>8, msg->id&0xFF);
     }
 }
+
+/* void gps_handle_ubx_message(uint8_t *buf, size_t len) { */
+/*     static bool fix = false; */
+/*     uint8_t *p = buf; */
+
+/*     ESP_LOGI(TAG, "gps_handle_ubx_message: %d", len); */
+/*     ESP_LOG_BUFFER_HEXDUMP(TAG, buf, len, ESP_LOG_INFO); */
+
+    
+/*     /\* we've found the start of a UBX message *\/ */
+/*     gps_message *msg = (gps_message *)(p+2); */
+/*     if (msg->id != NAV_PVT_ID) { */
+/* 	/\* it's not a message we can handle, log, ignore, and skip it *\/ */
+/* 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x not handled.\n", msg->id>>8, msg->id&0xFF); */
+		    
+/*     } else if ((p + 2 + 2 + 2) > (buf + len)) { */
+/* 	/\* it's too short to even contain a payload length. skip it *\/ */
+/* 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x too short (no payload length).\n", msg->id>>8, msg->id&0xFF); */
+		    
+/*     } else if ((p + 2 + 2 + msg->length + 2) > (buf + len)) { */
+/* 	/\* it's long enough for a payload length, but the message is incomplete  *\/ */
+/* 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x incomplete.\n", msg->id>>8, msg->id&0xFF); */
+		    
+/*     } else if (msg->checksum != gps_msg_checksum(p+2, 2+2+msg->length)) { */
+/* 	/\* it looks like a NAV-PVT but there's a checksum error *\/ */
+/* 	ESP_LOGW(TAG, "Message id: 0x%02x 0x%02x checksum error: msg=0x%04x calc=0x%04x.\n", */
+/* 		 msg->id>>8, msg->id&0xFF, msg->checksum, gps_msg_checksum(p+2, 2+2+msg->length)); */
+		    
+/*     } else { */
+/* 	/\* we have a NAV-PVT, the only message we need, and its format is valid (saying nothing about the GPS data validity) *\/ */
+/* 	ESP_LOGI(TAG, */
+/* 		 "NAV-PVT: %02d/%02d/%02d %02d:%02d:%02d, fix: %d, fixType: %d, numSV: %d, lat, lon: %d.%07d,%d.%07d checksum: 0x%04x",  */
+/* 		 msg->payload.navPVT.year,  */
+/* 		 msg->payload.navPVT.month,  */
+/* 		 msg->payload.navPVT.day, */
+/* 		 msg->payload.navPVT.hour,  */
+/* 		 msg->payload.navPVT.min,  */
+/* 		 msg->payload.navPVT.sec, */
+/* 		 msg->payload.navPVT.flags & 0x01, */
+/* 		 msg->payload.navPVT.fixType, */
+/* 		 msg->payload.navPVT.numSV, */
+/* 		 (msg->payload.navPVT.lat) / 10000000, abs((msg->payload.navPVT.lat) % 10000000), */
+/* 		 (msg->payload.navPVT.lon) / 10000000, abs((msg->payload.navPVT.lon) % 10000000), */
+/* 		 msg->checksum); */
+/* 	/\* check that BOTH the validDate and validTime flags are turned on *\/ */
+/* 	if ((msg->payload.navPVT.valid & NAV_PVT_VALID_DATE) && (msg->payload.navPVT.valid & NAV_PVT_VALID_TIME)) { */
+/* 	    /\* the first few messages sometimes have spurious data including date/time *\/ */
+/* 	    gps_write_trackpoint_to_file(msg); */
+/* 	    fix = (msg->payload.navPVT.flags & 0x01); */
+			   
+/* 	} else { */
+/* 	    ESP_LOGW(TAG, "Invalid date or time flag set: 0x%02x.\n", */
+/* 		     msg->payload.navPVT.valid); */
+/* 	} */
+/*     } */
+		
+/*     /\* blink red if no fix, green if fix *\/ */
+/*     if (fix) { */
+/* 	gps_blink(GPS_BLINK_GREEN, 10, 10, 1); */
+/* 	fix = false; /\* reset in case the next message is invalid *\/ */
+/*     } else { */
+/* 	gps_blink(GPS_BLINK_RED, 10, 10, 1); */
+/*     } */
+/* } */
 
 static void gps_handle_nmea_message(uint8_t *buf, size_t len) {
     ESP_LOGI(TAG, "gps_handle_nmea_message: %d", len);
