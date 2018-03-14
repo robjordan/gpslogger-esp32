@@ -78,6 +78,8 @@ CONFIG_MONITOR_BAUD=115200
 #
 CONFIG_WIFI_SSID="JM06"
 CONFIG_WIFI_PASSWORD="x6a40ef0064"
+CONFIG_ASSISTNOW_URL="http://offline-live1.services.u-blox.com/GetOfflineData.ashx?token=Se2UkiiyM0WL6O4jLi5O2w;gnss=gps;period=5;resolution=1"
+CONFIG_ASSISTNOW_HOST="offline-live1.services.u-blox.com"
 
 #
 # Partition Table

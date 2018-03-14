@@ -40,9 +40,9 @@ static EventGroupHandle_t wifi_event_group;
 const int CONNECTED_BIT = BIT0;
 
 /* Constants that aren't configurable in menuconfig */
-#define WEB_SERVER "offline-live1.services.u-blox.com"
+#define WEB_SERVER CONFIG_ASSISTNOW_HOST
 #define WEB_PORT 80
-#define WEB_URL "http://offline-live1.services.u-blox.com/GetOfflineData.ashx?token=Se2UkiiyM0WL6O4jLi5O2w;gnss=gps;period=5;resolution=1"
+#define WEB_URL CONFIG_ASSISTNOW_URL
 
 extern const char *TAG;
 
@@ -221,13 +221,13 @@ static void http_get_task(void *pvParameters)
 	do {
 	    /* make use of our knowledge of the generic format of UBX messages */
 	    r = read(s, recv_buf, 6);
-	    if (r == 6) {
+	    if (r == 6 && recv_buf[0] == 0xb5 && recv_buf[1] == 0x62) {
 		msglen = (recv_buf[5]<<8) + recv_buf[4];
 		// ESP_LOGI(TAG, "calling socket read(0x%08x, 0x%08x, %d)", s, (uint32_t)&recv_buf[6], msglen + 2);
-		r += read(s, &recv_buf[6], msglen + 2); /* don't forget to read the checksum */
+		r = read(s, &recv_buf[6], msglen + 2); /* don't forget to read the checksum */
 		ESP_LOGD(TAG, "socket read returned %d", r);
-		// ESP_LOG_BUFFER_HEXDUMP(TAG, recv_buf, r, ESP_LOG_INFO);
-		gps_handle_ubx_message(recv_buf, r);
+		ESP_LOG_BUFFER_HEXDUMP(TAG, recv_buf, r, ESP_LOG_INFO);
+		gps_handle_ubx_message(recv_buf, r + 6);
 	    }
 	} while(r > 0);
     }
@@ -239,8 +239,8 @@ void http_get_main()
 {
     ESP_ERROR_CHECK( nvs_flash_init() );
     initialise_wifi();
-    // xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-    http_get_task(NULL);
+    xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
+    // http_get_task(NULL);
     ESP_ERROR_CHECK( esp_wifi_stop() );
     ESP_ERROR_CHECK( esp_wifi_deinit() );
     
