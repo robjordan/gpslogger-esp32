@@ -1,0 +1,32 @@
+menu "Example Configuration"
+
+config WIFI_SSID
+    string "WiFi SSID"
+	default "myssid"
+	help
+		SSID (network name) for the example to connect to.
+
+config WIFI_PASSWORD
+    string "WiFi Password"
+	default "myssid"
+	help
+		WiFi password (WPA or WPA2) for the example to use.
+
+		Can be left blank if the network has no security set.
+
+
+config ASSISTNOW_URL
+    string "AssistNow Offline URL"
+        default "http://offline-live1.services.u-blox.com/GetOfflineData.ashx?token=Se2UkiiyM0WL6O4jLi5O2w;gnss=gps;period=5;resolution=1"
+	help
+		URL to download Ephemeris data from U-blox.
+		
+config ASSISTNOW_HOST
+    string "AssistNow Offline Server DNS name"
+        default "offline-live1.services.u-blox.com"
+	help
+		DNS name of the host to download AssistNow offline data.
+		
+
+
+endmenu
